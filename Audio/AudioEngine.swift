@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// Synthesized audio engine – pre-renders all sounds into buffers to avoid @Sendable closure issues.
+/// Synthesized audio engine – pre-renders all sounds into buffers.
 final class AudioEngine: ObservableObject {
     nonisolated(unsafe) static let shared = AudioEngine()
 
@@ -24,17 +24,11 @@ final class AudioEngine: ObservableObject {
         try? session.setActive(true)
     }
 
-    // MARK: - Buffer Rendering
+    // MARK: - Buffer Helpers
 
-    private func renderBuffer(frameCount: Int, generator: (Int, Double) -> Float) -> AVAudioPCMBuffer {
+    private func makeBuffer(frameCount: Int) -> AVAudioPCMBuffer {
         let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))!
         buf.frameLength = AVAudioFrameCount(frameCount)
-        let data = buf.floatChannelData![0]
-        let sr = sampleRate
-        for i in 0..<frameCount {
-            let t = Double(i) / sr
-            data[i] = generator(i, t)
-        }
         return buf
     }
 
@@ -49,8 +43,8 @@ final class AudioEngine: ObservableObject {
             }
         }
         if delay > 0 {
-            let delayTime = DispatchTimeInterval.milliseconds(Int(delay * 1000))
-            DispatchQueue.main.asyncAfter(deadline: .now() + delayTime) {
+            let ms = Int(delay * 1000)
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) {
                 player.play()
             }
         } else {
@@ -64,35 +58,42 @@ final class AudioEngine: ObservableObject {
         guard let notes = Self.chords[chordName] else { return }
         for (i, note) in notes.enumerated() {
             guard let freq = Self.noteFreqs[note] else { continue }
-            let delay = Double(i) * 0.025
+            let delay: Double = Double(i) * 0.025
             playGuitarNote(frequency: freq, delay: delay)
         }
     }
 
     private func playGuitarNote(frequency: Double, delay: Double) {
-        let sr = sampleRate
-        let freq = frequency
-        let totalFrames = Int(sr * 1.5)
+        let sr: Double = sampleRate
+        let freq: Double = frequency
+        let totalFrames: Int = Int(sr * 1.5)
+        let buffer = makeBuffer(frameCount: totalFrames)
+        let data: UnsafeMutablePointer<Float> = buffer.floatChannelData![0]
 
         var phase1: Double = 0
         var phase2: Double = 0
         var phase3: Double = 0
 
-        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
-            let saw = Float(2.0 * (phase1 - floor(phase1 + 0.5)))
-            let pluckEnv = Float(max(0.001, 0.15 * exp(-t / 0.02)))
-            let tri = Float(2.0 * abs(2.0 * (phase2 - floor(phase2 + 0.5))) - 1.0)
-            let bodyEnv = Float(max(0.001, 0.12 * exp(-t / 0.4)))
-            let harm = Float(sin(phase3 * 2.0 * .pi))
-            let harmEnv = Float(max(0.001, 0.04 * exp(-t / 0.15)))
+        for i in 0..<totalFrames {
+            let t: Double = Double(i) / sr
 
-            let sample = saw * pluckEnv + tri * bodyEnv + harm * harmEnv
+            let sawVal: Double = 2.0 * (phase1 - floor(phase1 + 0.5))
+            let pluckEnv: Double = max(0.001, 0.15 * exp(-t / 0.02))
+            let pluck: Double = sawVal * pluckEnv
+
+            let triRaw: Double = 2.0 * abs(2.0 * (phase2 - floor(phase2 + 0.5))) - 1.0
+            let bodyEnv: Double = max(0.001, 0.12 * exp(-t / 0.4))
+            let body: Double = triRaw * bodyEnv
+
+            let harmVal: Double = sin(phase3 * 2.0 * Double.pi)
+            let harmEnv: Double = max(0.001, 0.04 * exp(-t / 0.15))
+            let harm: Double = harmVal * harmEnv
+
+            data[i] = Float(pluck + body + harm)
 
             phase1 += freq / sr
             phase2 += freq / sr
-            phase3 += (freq * 2) / sr
-
-            return sample
+            phase3 += (freq * 2.0) / sr
         }
 
         playBuffer(buffer, delay: delay)
@@ -112,69 +113,84 @@ final class AudioEngine: ObservableObject {
     }
 
     private func playKick() {
-        let sr = sampleRate
-        let totalFrames = Int(sr * 0.5)
+        let sr: Double = sampleRate
+        let totalFrames: Int = Int(sr * 0.5)
+        let buffer = makeBuffer(frameCount: totalFrames)
+        let data: UnsafeMutablePointer<Float> = buffer.floatChannelData![0]
         var phase: Double = 0
 
-        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
-            let freq = 150.0 * pow(40.0 / 150.0, min(t / 0.12, 1.0))
-            let env = Float(max(0.001, 0.8 * exp(-t / 0.12)))
-            let sample = Float(sin(phase * 2.0 * .pi)) * env
+        for i in 0..<totalFrames {
+            let t: Double = Double(i) / sr
+            let freq: Double = 150.0 * pow(40.0 / 150.0, min(t / 0.12, 1.0))
+            let env: Double = max(0.001, 0.8 * exp(-t / 0.12))
+            data[i] = Float(sin(phase * 2.0 * Double.pi) * env)
             phase += freq / sr
-            return sample
         }
         playBuffer(buffer)
     }
 
     private func playSnare() {
-        let sr = sampleRate
-        let totalFrames = Int(sr * 0.2)
+        let sr: Double = sampleRate
+        let totalFrames: Int = Int(sr * 0.2)
+        let buffer = makeBuffer(frameCount: totalFrames)
+        let data: UnsafeMutablePointer<Float> = buffer.floatChannelData![0]
         var phase: Double = 0
 
-        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
-            let noise = Float.random(in: -1...1) * Float(max(0.001, 0.5 * exp(-t / 0.05)))
-            let tone = Float(sin(phase * 2.0 * .pi)) * Float(max(0.001, 0.35 * exp(-t / 0.03)))
+        for i in 0..<totalFrames {
+            let t: Double = Double(i) / sr
+            let noiseVal: Float = Float.random(in: -1...1)
+            let noiseEnv: Float = Float(max(0.001, 0.5 * exp(-t / 0.05)))
+            let toneVal: Float = Float(sin(phase * 2.0 * Double.pi))
+            let toneEnv: Float = Float(max(0.001, 0.35 * exp(-t / 0.03)))
+            data[i] = noiseVal * noiseEnv + toneVal * toneEnv
             phase += 180.0 / sr
-            return noise + tone
         }
         playBuffer(buffer)
     }
 
     private func playHiHat() {
-        let sr = sampleRate
-        let totalFrames = Int(sr * 0.1)
+        let sr: Double = sampleRate
+        let totalFrames: Int = Int(sr * 0.1)
+        let buffer = makeBuffer(frameCount: totalFrames)
+        let data: UnsafeMutablePointer<Float> = buffer.floatChannelData![0]
 
-        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
-            let noise = Float.random(in: -1...1)
-            let env = Float(max(0.001, 0.3 * exp(-t / 0.02)))
-            return noise * env * 0.5
+        for i in 0..<totalFrames {
+            let t: Double = Double(i) / sr
+            let noise: Float = Float.random(in: -1...1)
+            let env: Float = Float(max(0.001, 0.3 * exp(-t / 0.02)))
+            data[i] = noise * env * 0.5
         }
         playBuffer(buffer)
     }
 
     private func playTom() {
-        let sr = sampleRate
-        let totalFrames = Int(sr * 0.4)
+        let sr: Double = sampleRate
+        let totalFrames: Int = Int(sr * 0.4)
+        let buffer = makeBuffer(frameCount: totalFrames)
+        let data: UnsafeMutablePointer<Float> = buffer.floatChannelData![0]
         var phase: Double = 0
 
-        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
-            let freq = 120.0 * pow(70.0 / 120.0, min(t / 0.2, 1.0))
-            let env = Float(max(0.001, 0.6 * exp(-t / 0.1)))
-            let sample = Float(sin(phase * 2.0 * .pi)) * env
+        for i in 0..<totalFrames {
+            let t: Double = Double(i) / sr
+            let freq: Double = 120.0 * pow(70.0 / 120.0, min(t / 0.2, 1.0))
+            let env: Double = max(0.001, 0.6 * exp(-t / 0.1))
+            data[i] = Float(sin(phase * 2.0 * Double.pi) * env)
             phase += freq / sr
-            return sample
         }
         playBuffer(buffer)
     }
 
     private func playCrash() {
-        let sr = sampleRate
-        let totalFrames = Int(sr * 1.0)
+        let sr: Double = sampleRate
+        let totalFrames: Int = Int(sr * 1.0)
+        let buffer = makeBuffer(frameCount: totalFrames)
+        let data: UnsafeMutablePointer<Float> = buffer.floatChannelData![0]
 
-        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
-            let noise = Float.random(in: -1...1)
-            let env = Float(max(0.001, 0.35 * exp(-t / 0.3)))
-            return noise * env
+        for i in 0..<totalFrames {
+            let t: Double = Double(i) / sr
+            let noise: Float = Float.random(in: -1...1)
+            let env: Float = Float(max(0.001, 0.35 * exp(-t / 0.3)))
+            data[i] = noise * env
         }
         playBuffer(buffer)
     }
