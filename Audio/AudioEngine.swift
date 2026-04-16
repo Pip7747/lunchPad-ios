@@ -1,16 +1,17 @@
 import AVFoundation
 import Foundation
 
-/// Synthesized audio engine – replaces Web Audio API with AVAudioEngine.
-/// Generates all sounds procedurally (no sample files needed).
+/// Synthesized audio engine – pre-renders all sounds into buffers to avoid @Sendable closure issues.
 final class AudioEngine: ObservableObject {
-    static let shared = AudioEngine()
+    nonisolated(unsafe) static let shared = AudioEngine()
 
     private let engine = AVAudioEngine()
     private let mixer = AVAudioMixerNode()
     private let sampleRate: Double = 44100
+    private let format: AVAudioFormat
 
     private init() {
+        format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
         setupAudioSession()
         engine.attach(mixer)
         engine.connect(mixer, to: engine.mainMixerNode, format: nil)
@@ -23,9 +24,42 @@ final class AudioEngine: ObservableObject {
         try? session.setActive(true)
     }
 
+    // MARK: - Buffer Rendering
+
+    private func renderBuffer(frameCount: Int, generator: (Int, Double) -> Float) -> AVAudioPCMBuffer {
+        let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))!
+        buf.frameLength = AVAudioFrameCount(frameCount)
+        let data = buf.floatChannelData![0]
+        let sr = sampleRate
+        for i in 0..<frameCount {
+            let t = Double(i) / sr
+            data[i] = generator(i, t)
+        }
+        return buf
+    }
+
+    private func playBuffer(_ buffer: AVAudioPCMBuffer, delay: Double = 0) {
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: mixer, format: format)
+        player.scheduleBuffer(buffer) {
+            DispatchQueue.main.async { [weak self] in
+                player.stop()
+                self?.engine.detach(player)
+            }
+        }
+        if delay > 0 {
+            let delayTime = DispatchTimeInterval.milliseconds(Int(delay * 1000))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delayTime) {
+                player.play()
+            }
+        } else {
+            player.play()
+        }
+    }
+
     // MARK: - Chord Playback
 
-    /// Play a guitar-style chord using additive synthesis
     func playChord(_ chordName: String) {
         guard let notes = Self.chords[chordName] else { return }
         for (i, note) in notes.enumerated() {
@@ -36,51 +70,32 @@ final class AudioEngine: ObservableObject {
     }
 
     private func playGuitarNote(frequency: Double, delay: Double) {
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+        let sr = sampleRate
+        let freq = frequency
+        let totalFrames = Int(sr * 1.5)
+
         var phase1: Double = 0
         var phase2: Double = 0
         var phase3: Double = 0
-        var elapsed: Double = 0
-        let freq = frequency
-        let sr = sampleRate
 
-        let sourceNode = AVAudioSourceNode { _, _, frameCount, bufferList -> OSStatus in
-            let buffer = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let t = elapsed
-                // Attack pluck (sawtooth, fast decay)
-                let saw = Float(2.0 * (phase1 - floor(phase1 + 0.5)))
-                let pluckEnv = Float(max(0.001, 0.15 * exp(-t / 0.02)))
-                // Body (triangle, slow decay)
-                let tri = Float(2.0 * abs(2.0 * (phase2 - floor(phase2 + 0.5))) - 1.0)
-                let bodyEnv = Float(max(0.001, 0.12 * exp(-t / 0.4)))
-                // Harmonic (sine at 2x, medium decay)
-                let harm = Float(sin(phase3 * 2.0 * .pi))
-                let harmEnv = Float(max(0.001, 0.04 * exp(-t / 0.15)))
+        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
+            let saw = Float(2.0 * (phase1 - floor(phase1 + 0.5)))
+            let pluckEnv = Float(max(0.001, 0.15 * exp(-t / 0.02)))
+            let tri = Float(2.0 * abs(2.0 * (phase2 - floor(phase2 + 0.5))) - 1.0)
+            let bodyEnv = Float(max(0.001, 0.12 * exp(-t / 0.4)))
+            let harm = Float(sin(phase3 * 2.0 * .pi))
+            let harmEnv = Float(max(0.001, 0.04 * exp(-t / 0.15)))
 
-                buffer[i] = saw * pluckEnv + tri * bodyEnv + harm * harmEnv
+            let sample = saw * pluckEnv + tri * bodyEnv + harm * harmEnv
 
-                phase1 += freq / sr
-                phase2 += freq / sr
-                phase3 += (freq * 2) / sr
-                elapsed += 1.0 / sr
-            }
-            return noErr
+            phase1 += freq / sr
+            phase2 += freq / sr
+            phase3 += (freq * 2) / sr
+
+            return sample
         }
 
-        engine.attach(sourceNode)
-        engine.connect(sourceNode, to: mixer, format: format)
-
-        let delayTime = DispatchTimeInterval.milliseconds(Int(delay * 1000))
-        DispatchQueue.main.asyncAfter(deadline: .now() + delayTime) { [weak self] in
-            // Auto-remove after 1.5 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                self?.engine.detach(sourceNode)
-            }
-        }
+        playBuffer(buffer, delay: delay)
     }
 
     // MARK: - Drum Playback
@@ -97,121 +112,71 @@ final class AudioEngine: ObservableObject {
     }
 
     private func playKick() {
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        var phase: Double = 0
-        var elapsed: Double = 0
         let sr = sampleRate
+        let totalFrames = Int(sr * 0.5)
+        var phase: Double = 0
 
-        let node = AVAudioSourceNode { _, _, frameCount, bufferList -> OSStatus in
-            let buf = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let freq = 150.0 * pow(40.0 / 150.0, min(elapsed / 0.12, 1.0))
-                let env = Float(max(0.001, 0.8 * exp(-elapsed / 0.12)))
-                buf[i] = Float(sin(phase * 2.0 * .pi)) * env
-                phase += freq / sr
-                elapsed += 1.0 / sr
-            }
-            return noErr
+        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
+            let freq = 150.0 * pow(40.0 / 150.0, min(t / 0.12, 1.0))
+            let env = Float(max(0.001, 0.8 * exp(-t / 0.12)))
+            let sample = Float(sin(phase * 2.0 * .pi)) * env
+            phase += freq / sr
+            return sample
         }
-        playSynthNode(node, format: format, duration: 0.5)
+        playBuffer(buffer)
     }
 
     private func playSnare() {
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        var elapsed: Double = 0
-        var phase: Double = 0
         let sr = sampleRate
+        let totalFrames = Int(sr * 0.2)
+        var phase: Double = 0
 
-        let node = AVAudioSourceNode { _, _, frameCount, bufferList -> OSStatus in
-            let buf = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let noise = Float.random(in: -1...1) * Float(max(0.001, 0.5 * exp(-elapsed / 0.05)))
-                let tone = Float(sin(phase * 2.0 * .pi)) * Float(max(0.001, 0.35 * exp(-elapsed / 0.03)))
-                buf[i] = noise + tone
-                phase += 180.0 / sr
-                elapsed += 1.0 / sr
-            }
-            return noErr
+        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
+            let noise = Float.random(in: -1...1) * Float(max(0.001, 0.5 * exp(-t / 0.05)))
+            let tone = Float(sin(phase * 2.0 * .pi)) * Float(max(0.001, 0.35 * exp(-t / 0.03)))
+            phase += 180.0 / sr
+            return noise + tone
         }
-        playSynthNode(node, format: format, duration: 0.2)
+        playBuffer(buffer)
     }
 
     private func playHiHat() {
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        var elapsed: Double = 0
+        let sr = sampleRate
+        let totalFrames = Int(sr * 0.1)
 
-        let node = AVAudioSourceNode { _, _, frameCount, bufferList -> OSStatus in
-            let buf = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let noise = Float.random(in: -1...1)
-                let env = Float(max(0.001, 0.3 * exp(-elapsed / 0.02)))
-                // Simple high-pass approximation
-                buf[i] = noise * env * 0.5
-                elapsed += 1.0 / 44100.0
-            }
-            return noErr
+        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
+            let noise = Float.random(in: -1...1)
+            let env = Float(max(0.001, 0.3 * exp(-t / 0.02)))
+            return noise * env * 0.5
         }
-        playSynthNode(node, format: format, duration: 0.1)
+        playBuffer(buffer)
     }
 
     private func playTom() {
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        var phase: Double = 0
-        var elapsed: Double = 0
         let sr = sampleRate
+        let totalFrames = Int(sr * 0.4)
+        var phase: Double = 0
 
-        let node = AVAudioSourceNode { _, _, frameCount, bufferList -> OSStatus in
-            let buf = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let freq = 120.0 * pow(70.0 / 120.0, min(elapsed / 0.2, 1.0))
-                let env = Float(max(0.001, 0.6 * exp(-elapsed / 0.1)))
-                buf[i] = Float(sin(phase * 2.0 * .pi)) * env
-                phase += freq / sr
-                elapsed += 1.0 / sr
-            }
-            return noErr
+        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
+            let freq = 120.0 * pow(70.0 / 120.0, min(t / 0.2, 1.0))
+            let env = Float(max(0.001, 0.6 * exp(-t / 0.1)))
+            let sample = Float(sin(phase * 2.0 * .pi)) * env
+            phase += freq / sr
+            return sample
         }
-        playSynthNode(node, format: format, duration: 0.4)
+        playBuffer(buffer)
     }
 
     private func playCrash() {
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        var elapsed: Double = 0
+        let sr = sampleRate
+        let totalFrames = Int(sr * 1.0)
 
-        let node = AVAudioSourceNode { _, _, frameCount, bufferList -> OSStatus in
-            let buf = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let noise = Float.random(in: -1...1)
-                let env = Float(max(0.001, 0.35 * exp(-elapsed / 0.3)))
-                buf[i] = noise * env
-                elapsed += 1.0 / 44100.0
-            }
-            return noErr
+        let buffer = renderBuffer(frameCount: totalFrames) { _, t in
+            let noise = Float.random(in: -1...1)
+            let env = Float(max(0.001, 0.35 * exp(-t / 0.3)))
+            return noise * env
         }
-        playSynthNode(node, format: format, duration: 1.0)
-    }
-
-    private func playSynthNode(_ node: AVAudioSourceNode, format: AVAudioFormat, duration: Double) {
-        engine.attach(node)
-        engine.connect(node, to: mixer, format: format)
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-            self?.engine.detach(node)
-        }
+        playBuffer(buffer)
     }
 
     // MARK: - Music Theory Data
