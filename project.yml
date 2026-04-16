@@ -11,7 +11,11 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: LaunchPad
+      - sources:
+        - path: App
+        - path: Audio
+        - path: Game
+        - path: LaunchPad
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.launchpad.app
