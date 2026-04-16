@@ -16,7 +16,7 @@ workflows:
         script: |
           cd $CM_BUILD_DIR
           xcodegen generate
-      - name: Build
+            - name: Build
         script: |
           cd $CM_BUILD_DIR
           xcodebuild build \
@@ -25,9 +25,14 @@ workflows:
             -sdk iphonesimulator \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            CONFIGURATION_BUILD_DIR=$CM_BUILD_DIR/build
+      - name: Package app for Appetize
+        script: |
+          cd $CM_BUILD_DIR/build
+          zip -r LaunchPad.zip LaunchPad.app
     artifacts:
-      - build/**/*.app
+      - build/LaunchPad.zip
     publishing:
       email:
         recipients:
