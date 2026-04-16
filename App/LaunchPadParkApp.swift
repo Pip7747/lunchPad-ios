@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct LaunchPadParkApp: App {
+struct LaunchPadApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
