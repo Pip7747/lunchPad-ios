@@ -1,4 +1,4 @@
-name: LaunchPad
+name: LaunchPad-ios
 options:
   bundleIdPrefix: com.launchpad
   deploymentTarget:
