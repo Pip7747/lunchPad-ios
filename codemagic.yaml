@@ -1,6 +1,6 @@
 workflows:
-  ios-launchpadpark:
-    name: LaunchPad-iOS
+  ios-launchpad:
+    name: LaunchPad
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
@@ -14,11 +14,11 @@ workflows:
           brew install xcodegen
       - name: Generate Xcode project
         script: |
-          cd $CM_BUILD_DIR/LaunchPad-iOS
+          cd $CM_BUILD_DIR/LaunchPad
           xcodegen generate
       - name: Build
         script: |
-          cd $CM_BUILD_DIR/LaunchPad-iOS
+          cd $CM_BUILD_DIR/LaunchPad
           xcodebuild build \
             -project LaunchPad.xcodeproj \
             -scheme LaunchPad \
@@ -27,7 +27,7 @@ workflows:
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO
     artifacts:
-      - LaunchPad-iOS/build/**/*.app
+      - LaunchPad/build/**/*.app
     publishing:
       email:
         recipients:
