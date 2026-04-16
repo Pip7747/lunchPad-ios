@@ -30,4 +30,5 @@ workflows:
       - LaunchPadPark-iOS/build/**/*.app
     publishing:
       email:
-        recipients: []
+        recipients:
+          - elisihy.qian@gmail.com
