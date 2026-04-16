@@ -13,7 +13,6 @@ targets:
     sources:
         - path: App
         - path: Audio
-        - path: Game
         - path: LaunchPad
     settings:
       base:
