@@ -1,34 +1,24 @@
-workflows:
-  ios-launchpadpark:
-    name: LaunchPad Park iOS
-    max_build_duration: 30
-    instance_type: mac_mini_m2
-    environment:
-      xcode: latest
-      vars:
-        XCODE_PROJECT: "LaunchPadPark.xcodeproj"
-        XCODE_SCHEME: "LaunchPadPark"
-    scripts:
-      - name: Install XcodeGen
-        script: |
-          brew install xcodegen
-      - name: Generate Xcode project
-        script: |
-          cd $CM_BUILD_DIR/LaunchPadPark-iOS
-          xcodegen generate
-      - name: Build
-        script: |
-          cd $CM_BUILD_DIR/LaunchPadPark-iOS
-          xcodebuild build \
-            -project LaunchPadPark.xcodeproj \
-            -scheme LaunchPadPark \
-            -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 15' \
-            -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO
-    artifacts:
-      - LaunchPadPark-iOS/build/**/*.app
-    publishing:
-      email:
-        recipients:
-          - elisihy.qian@gmail.com
+name: LaunchPadPark
+options:
+  bundleIdPrefix: com.launchpadpark
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+
+targets:
+  LaunchPadPark:
+    type: application
+    platform: iOS
+    sources:
+      - path: LaunchPadPark
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.launchpadpark.app
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CODE_SIGN_STYLE: Automatic
