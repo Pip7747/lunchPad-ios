@@ -10,12 +10,6 @@ final class AudioEngine: ObservableObject {
     private let mixer = AVAudioMixerNode()
     private let sampleRate: Double = 44100
 
-    // Engine sound for the racing game
-    private var engineNode: AVAudioSourceNode?
-    private var engineFreq: Double = 60
-    private var engineVolume: Float = 0.0
-    private var enginePhase: Double = 0
-
     private init() {
         setupAudioSession()
         engine.attach(mixer)
@@ -217,97 +211,6 @@ final class AudioEngine: ObservableObject {
         engine.connect(node, to: mixer, format: format)
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
             self?.engine.detach(node)
-        }
-    }
-
-    // MARK: - Game Engine Sound
-
-    func startEngineSound() {
-        guard engineNode == nil else { return }
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        let sr = sampleRate
-
-        let node = AVAudioSourceNode { [weak self] _, _, frameCount, bufferList -> OSStatus in
-            guard let self = self else { return noErr }
-            let buf = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let saw = Float(2.0 * (self.enginePhase - floor(self.enginePhase + 0.5)))
-                buf[i] = saw * self.engineVolume
-                self.enginePhase += self.engineFreq / sr
-            }
-            return noErr
-        }
-
-        engineNode = node
-        engine.attach(node)
-        engine.connect(node, to: mixer, format: format)
-    }
-
-    func updateEngineSound(speedRatio: Double) {
-        engineFreq = 60 + speedRatio * 140
-        engineVolume = Float(0.03 + speedRatio * 0.05)
-    }
-
-    func stopEngineSound() {
-        if let node = engineNode {
-            engine.detach(node)
-            engineNode = nil
-        }
-        engineVolume = 0
-    }
-
-    // MARK: - Simple SFX (for game events)
-
-    func playSound(freq: Double, duration: Double, volume: Float = 0.08) {
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        var phase: Double = 0
-        var elapsed: Double = 0
-        let sr = sampleRate
-        let startFreq = freq
-
-        let node = AVAudioSourceNode { _, _, frameCount, bufferList -> OSStatus in
-            let buf = UnsafeMutableBufferPointer<Float>(
-                start: bufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self),
-                count: Int(frameCount)
-            )
-            for i in 0..<Int(frameCount) {
-                let f = startFreq * pow(0.5, elapsed / duration)
-                let env = Float(max(0.001, Double(volume) * exp(-elapsed / (duration * 0.8))))
-                // Square wave
-                let sq: Float = sin(phase * 2.0 * .pi) > 0 ? 1.0 : -1.0
-                buf[i] = sq * env
-                phase += f / sr
-                elapsed += 1.0 / sr
-            }
-            return noErr
-        }
-        playSynthNode(node, format: format, duration: duration + 0.05)
-    }
-
-    func playForkSound() {
-        playSound(freq: 440, duration: 0.08, volume: 0.06)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            self?.playSound(freq: 660, duration: 0.12, volume: 0.08)
-        }
-    }
-
-    func playStageSound() {
-        playSound(freq: 880, duration: 0.15, volume: 0.1)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.playSound(freq: 1320, duration: 0.2, volume: 0.1)
-        }
-    }
-
-    func playFinishSound() {
-        playSound(freq: 660, duration: 0.12, volume: 0.1)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            self?.playSound(freq: 880, duration: 0.12, volume: 0.1)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
-            self?.playSound(freq: 1320, duration: 0.3, volume: 0.12)
         }
     }
 
